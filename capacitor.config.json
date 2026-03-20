@@ -1,0 +1,8 @@
+{
+  "appId": "com.droidnas.app",
+  "appName": "DroidNAS",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}
