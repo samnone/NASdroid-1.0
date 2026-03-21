@@ -30,7 +30,9 @@ import {
   Copy,
   ChevronDown,
   RefreshCw,
-  Palette
+  Palette,
+  CloudUpload,
+  ArrowUpDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -78,7 +80,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [editingFile, setEditingFile] = useState<{ name: string; content: string } | null>(null);
   const [previewFile, setPreviewFile] = useState<FileInfo | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<FileInfo[] | null>(null);
 
   const handleEdit = async (file: FileInfo) => {
     if (file.mimeType.startsWith('text/')) {
@@ -138,6 +140,7 @@ export default function App() {
   const [isPoweredOn, setIsPoweredOn] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [isNetworkExpanded, setIsNetworkExpanded] = useState(false);
   const [isStorageExpanded, setIsStorageExpanded] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -151,7 +154,36 @@ export default function App() {
     permissions: ('all' | 'video' | 'image' | 'audio')[];
   }>>({});
   const [fileActionMenu, setFileActionMenu] = useState<FileInfo | null>(null);
+  const [isLocalActionsOpen, setIsLocalActionsOpen] = useState(false);
+  const [isSortOpen, setIsSortOpen] = useState(false);
+  const [sortBy, setSortBy] = useState<'name-asc' | 'name-desc' | 'date-asc' | 'date-desc'>('name-asc');
+  const [isCreateFolderModalOpen, setIsCreateFolderModalOpen] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const longPressTimer = useRef<NodeJS.Timeout | null>(null);
+  
+  // Info Bar Settings
+  const [infoBarEnabled, setInfoBarEnabled] = useState(true);
+  const [showBatteryInfo, setShowBatteryInfo] = useState(true);
+  const [showRemainingTime, setShowRemainingTime] = useState(true);
+  const [showNasActions, setShowNasActions] = useState(true);
+  
+  // Simulated Battery Info
+  const [batteryLevel, setBatteryLevel] = useState(85);
+  const [batteryTimeLeft, setBatteryTimeLeft] = useState(480); // minutes
+  
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setBatteryTimeLeft(prev => Math.max(0, prev - 1));
+    }, 60000); // Update every minute
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatTime = (minutes: number) => {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return `${h}h ${m}m`;
+  };
 
   const theme = {
     indigo: {
@@ -426,10 +458,18 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false);
 
   const filteredFiles = useMemo(() => {
-    return files.filter(file => 
+    const filtered = files.filter(file => 
       file.name.toLowerCase().includes(searchQuery.toLowerCase())
     );
-  }, [files, searchQuery]);
+    
+    return [...filtered].sort((a, b) => {
+      if (sortBy === 'name-asc') return a.name.localeCompare(b.name);
+      if (sortBy === 'name-desc') return b.name.localeCompare(a.name);
+      if (sortBy === 'date-asc') return new Date(a.mtime).getTime() - new Date(b.mtime).getTime();
+      if (sortBy === 'date-desc') return new Date(b.mtime).getTime() - new Date(a.mtime).getTime();
+      return 0;
+    });
+  }, [files, searchQuery, sortBy]);
 
   const fetchFiles = async (path = currentPath) => {
     try {
@@ -467,7 +507,50 @@ export default function App() {
     }
   };
 
+  const toggleFileSelection = (file: FileInfo) => {
+    const path = file.path || file.name;
+    const newSelection = new Set(selectedFiles);
+    if (newSelection.has(path)) {
+      newSelection.delete(path);
+    } else {
+      newSelection.add(path);
+    }
+    setSelectedFiles(newSelection);
+  };
+
+  const clearSelection = () => {
+    setSelectedFiles(new Set());
+  };
+
+  const handleBulkDelete = () => {
+    const filesToDelete = filteredFiles.filter(f => selectedFiles.has(f.path || f.name));
+    if (filesToDelete.length === 0) return;
+    setDeleteConfirmation(filesToDelete);
+  };
+
+  const handleBulkDownload = () => {
+    selectedFiles.forEach(path => {
+      const link = document.createElement('a');
+      link.href = `${API_BASE_URL}/api/download?path=${encodeURIComponent(path)}`;
+      link.download = path.split('/').pop() || '';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    });
+    clearSelection();
+  };
+
+  const handleBulkShare = () => {
+    const paths = Array.from(selectedFiles);
+    const links = paths.map((path: string) => `${window.location.origin}/api/download?path=${encodeURIComponent(path)}`).join('\n');
+    copyToClipboard(links);
+    setToast({ message: 'Enlaces copiados al portapapeles', type: 'success' });
+    setTimeout(() => setToast(null), 3000);
+    clearSelection();
+  };
+
   const navigateTo = (path: string) => {
+    if (selectedFiles.size > 0) return; // Prevent navigation during selection
     setCurrentPath(path);
     fetchFiles(path);
   };
@@ -481,6 +564,10 @@ export default function App() {
   };
 
   const handleFileClick = (file: FileInfo) => {
+    if (selectedFiles.size > 0) {
+      toggleFileSelection(file);
+      return;
+    }
     if (file.isDir) {
       navigateTo(file.path || '');
     } else {
@@ -489,6 +576,7 @@ export default function App() {
   };
 
   const handleFileLongPressStart = (file: FileInfo) => {
+    if (selectedFiles.size > 0) return;
     longPressTimer.current = setTimeout(() => {
       setFileActionMenu(file);
     }, 600);
@@ -530,10 +618,27 @@ export default function App() {
     }
   };
 
-  const handleDelete = async (path: string) => {
+  const handleBulkUploadToNas = async () => {
+    const filesToUpload = filteredFiles.filter(f => selectedFiles.has(f.path || f.name));
+    if (filesToUpload.length === 0) return;
+    
+    // Simulate uploading to NAS
+    setIsUploading(true);
+    setTimeout(() => {
+      setIsUploading(false);
+      clearSelection();
+      setToast({ message: `${filesToUpload.length} archivos subidos al NAS correctamente.`, type: 'success' });
+      setTimeout(() => setToast(null), 3000);
+    }, 2000);
+  };
+
+  const handleDelete = async (files: FileInfo[]) => {
     try {
-      await fetch(`${API_BASE_URL}/api/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
-      setDeleteConfirm(null);
+      for (const file of files) {
+        await fetch(`${API_BASE_URL}/api/files?path=${encodeURIComponent(file.path || file.name)}`, { method: 'DELETE' });
+      }
+      setDeleteConfirmation(null);
+      clearSelection();
       fetchFiles();
       fetchStatus();
     } catch (err) {
@@ -644,6 +749,53 @@ export default function App() {
         "md:ml-20",
         isSidebarOpen && "md:ml-64"
       )}>
+        {/* Information Bar (Simulated Notification Bar) */}
+        <AnimatePresence>
+          {infoBarEnabled && (
+            <motion.div 
+              initial={{ y: -50, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: -50, opacity: 0 }}
+              className={cn(
+                "sticky top-0 z-50 px-4 py-1.5 flex items-center justify-between text-[10px] font-bold tracking-wider uppercase border-b transition-colors",
+                isDarkMode ? "bg-slate-900/90 border-slate-800 text-slate-400" : "bg-white/90 border-slate-100 text-slate-500"
+              )}
+            >
+              <div className="flex items-center gap-4">
+                {showBatteryInfo && (
+                  <div className="flex items-center gap-1.5">
+                    <Battery className={cn("w-3 h-3", batteryLevel < 20 ? "text-rose-500" : "text-emerald-500")} />
+                    <span>Batería: {batteryLevel}%</span>
+                  </div>
+                )}
+                {showRemainingTime && (
+                  <div className="flex items-center gap-1.5">
+                    <RefreshCw className="w-3 h-3 animate-spin-slow" />
+                    <span>Restante: {formatTime(batteryTimeLeft)}</span>
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center gap-4">
+                {showNasActions && (
+                  <div className="flex items-center gap-2">
+                    {isUploading ? (
+                      <div className="flex items-center gap-1 text-indigo-500">
+                        <Upload className="w-3 h-3 animate-bounce" />
+                        <span>Subiendo...</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1 text-emerald-500">
+                        <Check className="w-3 h-3" />
+                        <span>NAS Listo</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Mobile-style Header (Hidden on Desktop) */}
         <header className={cn(
           "sticky top-0 z-30 backdrop-blur-md border-b px-4 py-3 flex items-center justify-between transition-colors md:hidden",
@@ -1014,7 +1166,7 @@ export default function App() {
                           </div>
                         )}
                       </div>
-                      <h4 className={cn("font-bold text-sm truncate", isDarkMode ? "text-white" : currentTheme.text)}>{device.name}</h4>
+                      <h4 className={cn("font-bold text-xs truncate", isDarkMode ? "text-white" : currentTheme.text)}>{device.name}</h4>
                       <p className="text-[10px] text-slate-400 font-medium">{device.ip}</p>
                       <div className="mt-2 flex items-center gap-1">
                         <span className={cn("w-1.5 h-1.5 rounded-full", settings.allowed ? currentTheme.successBg : currentTheme.mutedBg)} />
@@ -1043,7 +1195,7 @@ export default function App() {
                     <ChevronLeft className="w-5 h-5 text-slate-600" />
                   </button>
                 )}
-                <h3 className={cn("font-bold", isDarkMode ? "text-white" : currentTheme.text)}>
+                <h3 className={cn("font-bold text-sm", isDarkMode ? "text-white" : currentTheme.text)}>
                   {connectedDeviceId 
                     ? `Archivos de ${status?.remoteDevices?.find(d => d.id === connectedDeviceId)?.name}`
                     : currentPath ? `.../${currentPath.split('/').pop()}` : 'Archivos Locales'}
@@ -1051,55 +1203,205 @@ export default function App() {
               </div>
               
               <div className="flex items-center gap-2">
-                {!connectedDeviceId && !isReadOnly && (
-                  <>
-                    <button 
-                      onClick={() => {
-                        const name = prompt('Nombre de la carpeta:');
-                        if (name) handleCreateFolder(name);
-                      }}
-                      className={cn(
-                        "p-2 rounded-xl transition-all border text-xs font-bold flex items-center gap-2",
-                        isDarkMode ? "bg-slate-800 border-slate-700 text-slate-400" : "bg-white border-slate-200 text-slate-600"
-                      )}
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      Carpeta
-                    </button>
-                    <button 
-                      onClick={() => fileInputRef.current?.click()}
-                      className={cn(
-                        "p-2 rounded-xl transition-all border text-xs font-bold flex items-center gap-2",
-                        isDarkMode ? "bg-slate-800 border-slate-700 text-slate-400" : "bg-white border-slate-200 text-slate-600"
-                      )}
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      Subir
-                    </button>
-                    <input 
-                      type="file" 
-                      ref={fileInputRef} 
-                      onChange={handleUpload} 
-                      multiple 
-                      className="hidden" 
-                    />
-                  </>
-                )}
-                <button 
-                  onClick={() => {
-                    setConnectedDeviceId(null);
-                    fetchFiles('');
-                  }}
-                  className={cn(
-                    "p-2 rounded-xl transition-all border text-xs font-bold flex items-center gap-2",
-                    !connectedDeviceId 
-                      ? `${currentTheme.bg} ${currentTheme.accentBorder} text-white` 
-                      : isDarkMode ? "bg-slate-800 border-slate-700 text-slate-400" : "bg-white border-slate-200 text-slate-600"
-                  )}
-                >
-                  <HardDrive className="w-3.5 h-3.5" />
-                  Local
-                </button>
+                <div className="relative">
+                  <button 
+                    onClick={() => setIsSortOpen(!isSortOpen)}
+                    className={cn(
+                      "p-2 rounded-xl transition-all border text-xs font-bold flex items-center gap-2",
+                      isSortOpen 
+                        ? `${currentTheme.bg} ${currentTheme.accentBorder} text-white` 
+                        : isDarkMode ? "bg-slate-800 border-slate-700 text-slate-400" : "bg-white border-slate-200 text-slate-600"
+                    )}
+                  >
+                    <ArrowUpDown className="w-3.5 h-3.5" />
+                    Ordenar
+                    <ChevronDown className={cn("w-3 h-3 transition-transform", isSortOpen && "rotate-180")} />
+                  </button>
+                  <AnimatePresence>
+                    {isSortOpen && (
+                      <motion.div 
+                        initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                        className={cn(
+                          "absolute right-0 top-full mt-2 w-48 rounded-2xl shadow-2xl border overflow-hidden z-50",
+                          isDarkMode ? "bg-slate-900 border-slate-800" : "bg-white border-slate-200"
+                        )}
+                      >
+                        <div className={cn("p-3 border-b text-[10px] font-bold uppercase tracking-wider", isDarkMode ? "border-slate-800 text-slate-500" : "border-slate-100 text-slate-400")}>
+                          Ordenar por
+                        </div>
+                        {[
+                          { id: 'name-asc', label: 'Nombre (A-Z)', icon: <FileText className="w-4 h-4" /> },
+                          { id: 'name-desc', label: 'Nombre (Z-A)', icon: <FileText className="w-4 h-4" /> },
+                          { id: 'date-desc', label: 'Más Reciente', icon: <Activity className="w-4 h-4" /> },
+                          { id: 'date-asc', label: 'Más Antiguo', icon: <Activity className="w-4 h-4" /> },
+                        ].map(option => (
+                          <button
+                            key={option.id}
+                            onClick={() => {
+                              setSortBy(option.id as any);
+                              setIsSortOpen(false);
+                            }}
+                            className={cn(
+                              "w-full p-4 text-left text-xs font-bold transition-colors flex items-center justify-between",
+                              sortBy === option.id ? `${currentTheme.bg} text-white` : isDarkMode ? "hover:bg-slate-800 text-slate-300" : "hover:bg-slate-50 text-slate-600"
+                            )}
+                          >
+                            <div className="flex items-center gap-3">
+                              {option.icon}
+                              <span>{option.label}</span>
+                            </div>
+                            {sortBy === option.id && <Check className="w-3.5 h-3.5" />}
+                          </button>
+                        ))}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
+                <div className="relative">
+                  <button 
+                    onClick={() => setIsLocalActionsOpen(!isLocalActionsOpen)}
+                    className={cn(
+                      "p-2 rounded-xl transition-all border text-xs font-bold flex items-center gap-2",
+                      isLocalActionsOpen 
+                        ? `${currentTheme.bg} ${currentTheme.accentBorder} text-white` 
+                        : isDarkMode ? "bg-slate-800 border-slate-700 text-slate-400" : "bg-white border-slate-200 text-slate-600"
+                    )}
+                  >
+                    <Plus className={cn("w-3.5 h-3.5 transition-transform", isLocalActionsOpen && "rotate-45")} />
+                    Acciones
+                  </button>
+                  
+                  <AnimatePresence>
+                    {isLocalActionsOpen && (
+                      <motion.div 
+                        initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                        className={cn(
+                          "absolute right-0 top-full mt-2 w-56 rounded-2xl shadow-2xl border overflow-hidden z-50",
+                          isDarkMode ? "bg-slate-900 border-slate-800" : "bg-white border-slate-200"
+                        )}
+                      >
+                        {selectedFiles.size > 0 ? (
+                          <>
+                            <div className={cn("p-3 border-b text-[10px] font-bold uppercase tracking-wider", isDarkMode ? "border-slate-800 text-slate-500" : "border-slate-100 text-slate-400")}>
+                              {selectedFiles.size} seleccionados
+                            </div>
+                            <button 
+                              onClick={() => {
+                                setIsLocalActionsOpen(false);
+                                handleBulkUploadToNas();
+                              }}
+                              className={cn(
+                                "w-full p-4 text-left text-xs font-bold transition-colors flex items-center gap-3",
+                                isDarkMode ? "hover:bg-slate-800 text-slate-300" : "hover:bg-slate-50 text-slate-600"
+                              )}
+                            >
+                              <CloudUpload className={cn("w-4 h-4", currentTheme.accent)} />
+                              Subir a NAS
+                            </button>
+                            <button 
+                              onClick={() => {
+                                setIsLocalActionsOpen(false);
+                                handleBulkDownload();
+                              }}
+                              className={cn(
+                                "w-full p-4 text-left text-xs font-bold transition-colors flex items-center gap-3",
+                                isDarkMode ? "hover:bg-slate-800 text-slate-300" : "hover:bg-slate-50 text-slate-600"
+                              )}
+                            >
+                              <Download className={cn("w-4 h-4", currentTheme.accent)} />
+                              Descargar
+                            </button>
+                            <button 
+                              onClick={() => {
+                                setIsLocalActionsOpen(false);
+                                handleBulkShare();
+                              }}
+                              className={cn(
+                                "w-full p-4 text-left text-xs font-bold transition-colors flex items-center gap-3",
+                                isDarkMode ? "hover:bg-slate-800 text-slate-300" : "hover:bg-slate-50 text-slate-600"
+                              )}
+                            >
+                              <Copy className={cn("w-4 h-4", currentTheme.accent)} />
+                              Compartir Enlaces
+                            </button>
+                            <button 
+                              onClick={() => {
+                                setIsLocalActionsOpen(false);
+                                handleBulkDelete();
+                              }}
+                              className={cn(
+                                "w-full p-4 text-left text-xs font-bold transition-colors flex items-center gap-3 text-red-500",
+                                isDarkMode ? "hover:bg-slate-800" : "hover:bg-slate-50"
+                              )}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              Borrar Selección
+                            </button>
+                            <button 
+                              onClick={() => {
+                                setIsLocalActionsOpen(false);
+                                clearSelection();
+                              }}
+                              className={cn(
+                                "w-full p-4 text-left text-xs font-bold transition-colors flex items-center gap-3 border-t",
+                                isDarkMode ? "border-slate-800 hover:bg-slate-800 text-slate-400" : "border-slate-100 hover:bg-slate-50 text-slate-500"
+                              )}
+                            >
+                              <X className="w-4 h-4" />
+                              Cancelar
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            {!isReadOnly && (
+                              <>
+                                <button 
+                                  onClick={() => {
+                                    setIsLocalActionsOpen(false);
+                                    setIsCreateFolderModalOpen(true);
+                                  }}
+                                  className={cn(
+                                    "w-full p-4 text-left text-xs font-bold transition-colors flex items-center gap-3",
+                                    isDarkMode ? "hover:bg-slate-800 text-slate-300" : "hover:bg-slate-50 text-slate-600"
+                                  )}
+                                >
+                                  <Folder className={cn("w-4 h-4", currentTheme.accent)} />
+                                  Nueva Carpeta
+                                </button>
+                                <button 
+                                  onClick={() => {
+                                    setIsLocalActionsOpen(false);
+                                    fileInputRef.current?.click();
+                                  }}
+                                  className={cn(
+                                    "w-full p-4 text-left text-xs font-bold transition-colors flex items-center gap-3",
+                                    isDarkMode ? "hover:bg-slate-800 text-slate-300" : "hover:bg-slate-50 text-slate-600"
+                                  )}
+                                >
+                                  <Upload className={cn("w-4 h-4", currentTheme.accent)} />
+                                  Subir Archivos
+                                </button>
+                                <input 
+                                  type="file" 
+                                  ref={fileInputRef} 
+                                  onChange={handleUpload} 
+                                  multiple 
+                                  className="hidden" 
+                                />
+                              </>
+                            )}
+                          </>
+                        )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+                
                 <div className="relative">
                   <button 
                     onClick={() => setIsDeviceSelectorOpen(!isDeviceSelectorOpen)}
@@ -1129,6 +1431,20 @@ export default function App() {
                           Dispositivos Disponibles
                         </div>
                         <div className="max-h-64 overflow-y-auto">
+                          <button 
+                            onClick={() => {
+                              setIsDeviceSelectorOpen(false);
+                              setConnectedDeviceId(null);
+                              fetchFiles('');
+                            }}
+                            className={cn(
+                              "w-full p-4 text-left text-xs font-bold transition-colors flex items-center gap-3",
+                              !connectedDeviceId ? `${currentTheme.bg} text-white` : isDarkMode ? "hover:bg-slate-800 text-slate-300" : "hover:bg-slate-50 text-slate-600"
+                            )}
+                          >
+                            <HardDrive className={cn("w-4 h-4", !connectedDeviceId ? "text-white" : currentTheme.accent)} />
+                            Almacenamiento Local
+                          </button>
                           {status?.remoteDevices?.map(device => {
                             const settings = deviceSettings[device.id] || { allowed: true, permissions: 'all' };
                             return (
@@ -1186,7 +1502,9 @@ export default function App() {
                 </div>
               ) : (
                 <div className={cn("divide-y", isDarkMode ? "divide-slate-800" : "divide-slate-100")}>
-                  {filteredFiles.map((file, idx) => (
+                  {filteredFiles.map((file, idx) => {
+                    const isSelected = selectedFiles.has(file.path || file.name);
+                    return (
                       <motion.div 
                         key={file.path || file.name}
                         initial={{ opacity: 0, x: -10 }}
@@ -1194,7 +1512,7 @@ export default function App() {
                         transition={{ delay: idx * 0.05 }}
                         className={cn(
                           "group flex items-center justify-between p-4 transition-colors cursor-pointer select-none",
-                          isDarkMode ? "hover:bg-slate-800" : "hover:bg-slate-50"
+                          isSelected ? (isDarkMode ? "bg-slate-800" : "bg-slate-50") : (isDarkMode ? "hover:bg-slate-800" : "hover:bg-slate-50")
                         )}
                         onClick={() => handleFileClick(file)}
                         onMouseDown={() => handleFileLongPressStart(file)}
@@ -1203,49 +1521,57 @@ export default function App() {
                         onTouchStart={() => handleFileLongPressStart(file)}
                         onTouchEnd={handleFileLongPressEnd}
                       >
-                      <div className="flex items-center gap-4 min-w-0">
-                        <div className={cn(
-                          "w-12 h-12 rounded-2xl flex items-center justify-center transition-colors",
-                          isDarkMode ? "bg-slate-800 group-hover:bg-slate-700" : "bg-slate-50 group-hover:bg-white"
-                        )}>
-                          {getFileIcon(file)}
+                        <div className="flex items-center gap-4 min-w-0">
+                          <div 
+                            className={cn(
+                              "w-12 h-12 rounded-2xl flex items-center justify-center transition-all relative",
+                              isSelected ? currentTheme.bg : (isDarkMode ? "bg-slate-800 group-hover:bg-slate-700" : "bg-slate-50 group-hover:bg-white")
+                            )}
+                            onMouseDown={(e) => {
+                              e.stopPropagation();
+                              longPressTimer.current = setTimeout(() => toggleFileSelection(file), 600);
+                            }}
+                            onMouseUp={() => {
+                              if (longPressTimer.current) clearTimeout(longPressTimer.current);
+                            }}
+                            onTouchStart={(e) => {
+                              e.stopPropagation();
+                              longPressTimer.current = setTimeout(() => toggleFileSelection(file), 600);
+                            }}
+                            onTouchEnd={() => {
+                              if (longPressTimer.current) clearTimeout(longPressTimer.current);
+                            }}
+                          >
+                            {isSelected ? (
+                              <Check className="w-6 h-6 text-white" />
+                            ) : (
+                              getFileIcon(file)
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <h4 className={cn("font-semibold truncate pr-4", isDarkMode ? "text-white" : currentTheme.text)}>{file.name}</h4>
+                            <p className="text-xs text-slate-400">
+                              {file.isDir ? 'Carpeta' : formatSize(file.size)} • {new Date(file.mtime).toLocaleDateString()}
+                            </p>
+                          </div>
                         </div>
-                        <div className="min-w-0">
-                          <h4 className={cn("font-semibold truncate pr-4", isDarkMode ? "text-white" : currentTheme.text)}>{file.name}</h4>
-                          <p className="text-xs text-slate-400">
-                            {file.isDir ? 'Carpeta' : formatSize(file.size)} • {new Date(file.mtime).toLocaleDateString()}
-                          </p>
-                        </div>
-                      </div>
-                      {!file.isDir && (
                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <a 
-                            href={`${API_BASE_URL}/api/download?path=${encodeURIComponent(file.path || file.name)}`} 
-                            download 
-                            onClick={(e) => e.stopPropagation()}
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setFileActionMenu(file);
+                            }}
                             className={cn(
                               "p-2 rounded-xl transition-all",
                               isDarkMode ? `hover:bg-slate-700 text-slate-400 hover:${currentTheme.textLight}` : `hover:bg-white text-slate-600 hover:${currentTheme.text}`
                             )}
                           >
-                            <Download className="w-5 h-5" />
-                          </a>
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setDeleteConfirm(file.path || file.name);
-                            }}
-                            className={cn(
-                              "p-2 rounded-xl transition-all",
-                              isDarkMode ? "hover:bg-slate-700 text-slate-400 hover:text-red-400" : "hover:bg-white text-slate-600 hover:text-red-600"
-                            )}
-                          >
-                            <Trash2 className="w-5 h-5" />
+                            <MoreVertical className="w-5 h-5" />
                           </button>
                         </div>
-                      )}
-                    </motion.div>
-                  ))}
+                      </motion.div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1357,6 +1683,80 @@ export default function App() {
                     />
                   </div>
                 </button>
+
+                <div className={cn(
+                  "w-full p-4 rounded-2xl space-y-4",
+                  isDarkMode ? "bg-slate-800" : "bg-slate-50"
+                )}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Activity className={cn("w-5 h-5", currentTheme.accent)} />
+                      <span className={cn("font-semibold", isDarkMode ? "text-slate-200" : "text-slate-700")}>Barra de Información</span>
+                    </div>
+                    <button 
+                      onClick={() => setInfoBarEnabled(!infoBarEnabled)}
+                      className={cn(
+                        "w-12 h-6 rounded-full relative transition-colors",
+                        infoBarEnabled ? currentTheme.bg : "bg-slate-200"
+                      )}
+                    >
+                      <motion.div 
+                        animate={{ x: infoBarEnabled ? 24 : 4 }}
+                        className="absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm" 
+                      />
+                    </button>
+                  </div>
+                  
+                  {infoBarEnabled && (
+                    <div className="pl-7 space-y-3 border-l border-slate-200 dark:border-slate-700 ml-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-slate-500">Nivel de Batería</span>
+                        <button 
+                          onClick={() => setShowBatteryInfo(!showBatteryInfo)}
+                          className={cn(
+                            "w-10 h-5 rounded-full relative transition-colors",
+                            showBatteryInfo ? currentTheme.bg : "bg-slate-200"
+                          )}
+                        >
+                          <motion.div 
+                            animate={{ x: showBatteryInfo ? 20 : 4 }}
+                            className="absolute top-1 w-3 h-3 bg-white rounded-full" 
+                          />
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-slate-500">Tiempo Restante</span>
+                        <button 
+                          onClick={() => setShowRemainingTime(!showRemainingTime)}
+                          className={cn(
+                            "w-10 h-5 rounded-full relative transition-colors",
+                            showRemainingTime ? currentTheme.bg : "bg-slate-200"
+                          )}
+                        >
+                          <motion.div 
+                            animate={{ x: showRemainingTime ? 20 : 4 }}
+                            className="absolute top-1 w-3 h-3 bg-white rounded-full" 
+                          />
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-slate-500">Acciones del NAS</span>
+                        <button 
+                          onClick={() => setShowNasActions(!showNasActions)}
+                          className={cn(
+                            "w-10 h-5 rounded-full relative transition-colors",
+                            showNasActions ? currentTheme.bg : "bg-slate-200"
+                          )}
+                        >
+                          <motion.div 
+                            animate={{ x: showNasActions ? 20 : 4 }}
+                            className="absolute top-1 w-3 h-3 bg-white rounded-full" 
+                          />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
 
                 <div className={cn(
                   "w-full p-4 rounded-2xl space-y-4",
@@ -1496,7 +1896,7 @@ export default function App() {
           </motion.div>
         )}
 
-        {deleteConfirm && (
+        {deleteConfirmation && (
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -1514,11 +1914,17 @@ export default function App() {
               <div className={cn("w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6", currentTheme.dangerLight)}>
                 <AlertCircle className={cn("w-8 h-8", currentTheme.danger)} />
               </div>
-              <h3 className={cn("text-xl font-bold mb-2", isDarkMode ? "text-white" : currentTheme.text)}>¿Eliminar archivo?</h3>
-              <p className="text-slate-500 mb-8">Esta acción no se puede deshacer. El archivo se borrará permanentemente del NAS.</p>
+              <h3 className={cn("text-xl font-bold mb-2", isDarkMode ? "text-white" : currentTheme.text)}>
+                {deleteConfirmation.length > 1 ? `¿Eliminar ${deleteConfirmation.length} archivos?` : '¿Eliminar archivo?'}
+              </h3>
+              <p className="text-slate-500 mb-8">
+                {deleteConfirmation.length > 1 
+                  ? 'Esta acción no se puede deshacer. Los archivos seleccionados se borrarán permanentemente.'
+                  : `Esta acción no se puede deshacer. "${deleteConfirmation[0].name}" se borrará permanentemente.`}
+              </p>
               <div className="flex gap-3">
                 <button 
-                  onClick={() => setDeleteConfirm(null)}
+                  onClick={() => setDeleteConfirmation(null)}
                   className={cn(
                     "flex-1 py-3 rounded-2xl font-bold transition-colors",
                     isDarkMode ? "bg-slate-800 text-slate-400 hover:bg-slate-700" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -1527,7 +1933,7 @@ export default function App() {
                   Cancelar
                 </button>
                 <button 
-                  onClick={() => handleDelete(deleteConfirm)}
+                  onClick={() => handleDelete(deleteConfirmation)}
                   className={cn("flex-1 py-3 rounded-2xl font-bold text-white transition-colors shadow-lg", currentTheme.dangerBg, currentTheme.shadow)}
                 >
                   Eliminar
@@ -1784,19 +2190,6 @@ export default function App() {
               )}
 
               <div className="grid grid-cols-1 gap-2 mb-6">
-                <button 
-                  onClick={() => {
-                    handleEdit(fileActionMenu);
-                    setFileActionMenu(null);
-                  }}
-                  className={cn(
-                    "flex items-center gap-3 p-4 rounded-2xl font-bold transition-colors",
-                    isDarkMode ? "hover:bg-slate-800 text-slate-300" : "hover:bg-slate-50 text-slate-700"
-                  )}
-                >
-                  <Play className={cn("w-5 h-5", currentTheme.accent)} />
-                  Previsualizar Pantalla Completa
-                </button>
                 <a 
                   href={`${API_BASE_URL}/api/download?path=${encodeURIComponent(fileActionMenu.path || fileActionMenu.name)}`}
                   download
@@ -1824,7 +2217,7 @@ export default function App() {
                 {!isReadOnly && (
                   <button 
                     onClick={() => {
-                      setDeleteConfirm(fileActionMenu.path || fileActionMenu.name);
+                      setDeleteConfirmation([fileActionMenu]);
                       setFileActionMenu(null);
                     }}
                     className={cn(
@@ -1848,6 +2241,97 @@ export default function App() {
                 Cancelar
               </button>
             </motion.div>
+          </motion.div>
+        )}
+        {isCreateFolderModalOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-6"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              className={cn(
+                "w-full max-w-sm rounded-[32px] p-8 shadow-2xl border",
+                isDarkMode ? "bg-slate-900 border-slate-800" : "bg-white border-slate-100"
+              )}
+            >
+              <div className="flex items-center gap-4 mb-6">
+                <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center", isDarkMode ? "bg-slate-800" : "bg-slate-50")}>
+                  <Folder className={cn("w-6 h-6", currentTheme.accent)} />
+                </div>
+                <div>
+                  <h3 className={cn("text-lg font-bold", isDarkMode ? "text-white" : currentTheme.text)}>Nueva Carpeta</h3>
+                  <p className="text-xs text-slate-500">Introduce el nombre de la carpeta</p>
+                </div>
+              </div>
+
+              <input 
+                autoFocus
+                type="text"
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                placeholder="Nombre de la carpeta"
+                className={cn(
+                  "w-full p-4 rounded-2xl border mb-6 font-bold text-sm outline-none transition-all",
+                  isDarkMode ? "bg-slate-800 border-slate-700 text-white focus:border-indigo-500" : "bg-slate-50 border-slate-200 text-slate-700 focus:border-indigo-500"
+                )}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newFolderName.trim()) {
+                    handleCreateFolder(newFolderName.trim());
+                    setIsCreateFolderModalOpen(false);
+                    setNewFolderName('');
+                  }
+                }}
+              />
+
+              <div className="grid grid-cols-2 gap-3">
+                <button 
+                  onClick={() => {
+                    setIsCreateFolderModalOpen(false);
+                    setNewFolderName('');
+                  }}
+                  className={cn(
+                    "py-4 rounded-2xl font-bold transition-colors text-sm",
+                    isDarkMode ? "bg-slate-800 text-slate-400 hover:bg-slate-700" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  )}
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={() => {
+                    if (newFolderName.trim()) {
+                      handleCreateFolder(newFolderName.trim());
+                      setIsCreateFolderModalOpen(false);
+                      setNewFolderName('');
+                    }
+                  }}
+                  className={cn(
+                    "py-4 rounded-2xl font-bold transition-colors text-sm text-white",
+                    currentTheme.bg,
+                    currentTheme.bgHover
+                  )}
+                >
+                  Crear
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+        {toast && (
+          <motion.div 
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 50 }}
+            className={cn(
+              "fixed bottom-24 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full shadow-2xl z-[60] flex items-center gap-2 font-bold text-sm",
+              toast.type === 'success' ? "bg-emerald-500 text-white" : "bg-red-500 text-white"
+            )}
+          >
+            {toast.type === 'success' ? <Check className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+            {toast.message}
           </motion.div>
         )}
       </AnimatePresence>
