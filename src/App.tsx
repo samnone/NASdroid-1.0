@@ -83,9 +83,9 @@ export default function App() {
   const handleEdit = async (file: FileInfo) => {
     if (file.mimeType.startsWith('text/')) {
       try {
-        const res = await fetch(`${API_BASE_URL}/api/preview/${file.name}`);
+        const res = await fetch(`${API_BASE_URL}/api/preview?path=${encodeURIComponent(file.path || file.name)}`);
         const content = await res.text();
-        setEditingFile({ name: file.name, content });
+        setEditingFile({ name: file.path || file.name, content });
       } catch (err) {
         console.error('Failed to load file for editing:', err);
       }
@@ -97,12 +97,17 @@ export default function App() {
   const saveEdit = async () => {
     if (!editingFile) return;
     const blob = new Blob([editingFile.content], { type: 'text/plain' });
-    const file = new File([blob], editingFile.name);
+    const file = new File([blob], editingFile.name.split('/').pop() || editingFile.name);
     const formData = new FormData();
     formData.append('files', file);
 
     try {
-      await fetch(`${API_BASE_URL}/api/upload`, {
+      // Save to the directory where the file is located
+      const filePathParts = editingFile.name.split('/');
+      filePathParts.pop();
+      const dirPath = filePathParts.join('/');
+      
+      await fetch(`${API_BASE_URL}/api/upload?path=${encodeURIComponent(dirPath)}`, {
         method: 'POST',
         body: formData,
       });
@@ -512,7 +517,7 @@ export default function App() {
     }
 
     try {
-      await fetch(`${API_BASE_URL}/api/upload`, {
+      await fetch(`${API_BASE_URL}/api/upload?path=${encodeURIComponent(currentPath)}`, {
         method: 'POST',
         body: formData,
       });
@@ -525,14 +530,27 @@ export default function App() {
     }
   };
 
-  const handleDelete = async (filename: string) => {
+  const handleDelete = async (path: string) => {
     try {
-      await fetch(`${API_BASE_URL}/api/files/${filename}`, { method: 'DELETE' });
+      await fetch(`${API_BASE_URL}/api/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
       setDeleteConfirm(null);
       fetchFiles();
       fetchStatus();
     } catch (err) {
       console.error('Delete failed:', err);
+    }
+  };
+
+  const handleCreateFolder = async (name: string) => {
+    try {
+      await fetch(`${API_BASE_URL}/api/mkdir`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, path: currentPath }),
+      });
+      fetchFiles();
+    } catch (err) {
+      console.error('Create folder failed:', err);
     }
   };
 
@@ -565,7 +583,7 @@ export default function App() {
           )}>
             <HardDrive className="w-6 h-6 text-white" />
           </div>
-          {isSidebarOpen && <h1 className="font-bold text-xl tracking-tight">DroidNAS</h1>}
+          {isSidebarOpen && <h1 className="font-bold text-xl tracking-tight">NASdroid 1.0</h1>}
         </div>
 
         <nav className="flex-1 px-4 space-y-2 mt-4">
@@ -646,7 +664,7 @@ export default function App() {
               <HardDrive className="w-6 h-6 text-white" />
             </div>
             <div>
-              <h1 className="font-bold text-lg tracking-tight">DroidNAS</h1>
+              <h1 className="font-bold text-lg tracking-tight">NASdroid 1.0</h1>
               <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-slate-500">
                 <span className={cn(
                   "w-1.5 h-1.5 rounded-full animate-pulse",
@@ -1033,6 +1051,40 @@ export default function App() {
               </div>
               
               <div className="flex items-center gap-2">
+                {!connectedDeviceId && !isReadOnly && (
+                  <>
+                    <button 
+                      onClick={() => {
+                        const name = prompt('Nombre de la carpeta:');
+                        if (name) handleCreateFolder(name);
+                      }}
+                      className={cn(
+                        "p-2 rounded-xl transition-all border text-xs font-bold flex items-center gap-2",
+                        isDarkMode ? "bg-slate-800 border-slate-700 text-slate-400" : "bg-white border-slate-200 text-slate-600"
+                      )}
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Carpeta
+                    </button>
+                    <button 
+                      onClick={() => fileInputRef.current?.click()}
+                      className={cn(
+                        "p-2 rounded-xl transition-all border text-xs font-bold flex items-center gap-2",
+                        isDarkMode ? "bg-slate-800 border-slate-700 text-slate-400" : "bg-white border-slate-200 text-slate-600"
+                      )}
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      Subir
+                    </button>
+                    <input 
+                      type="file" 
+                      ref={fileInputRef} 
+                      onChange={handleUpload} 
+                      multiple 
+                      className="hidden" 
+                    />
+                  </>
+                )}
                 <button 
                   onClick={() => {
                     setConnectedDeviceId(null);
@@ -1168,7 +1220,7 @@ export default function App() {
                       {!file.isDir && (
                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                           <a 
-                            href={`/api/download/${file.name}`} 
+                            href={`${API_BASE_URL}/api/download?path=${encodeURIComponent(file.path || file.name)}`} 
                             download 
                             onClick={(e) => e.stopPropagation()}
                             className={cn(
@@ -1181,7 +1233,7 @@ export default function App() {
                           <button 
                             onClick={(e) => {
                               e.stopPropagation();
-                              setDeleteConfirm(file.name);
+                              setDeleteConfirm(file.path || file.name);
                             }}
                             className={cn(
                               "p-2 rounded-xl transition-all",
@@ -1214,7 +1266,7 @@ export default function App() {
                 <Info className={cn("w-10 h-10", currentTheme.text)} />
               </div>
               <h2 className={cn("text-2xl font-bold mb-2", isDarkMode ? "text-white" : currentTheme.text)}>Información del Sistema</h2>
-              <p className="text-slate-500 mb-8">Estadísticas detalladas de tu servidor DroidNAS.</p>
+              <p className="text-slate-500 mb-8">Estadísticas detalladas de tu servidor NASdroid 1.0.</p>
               
               <div className="grid grid-cols-2 gap-4 text-left">
                 <div className={cn("p-4 rounded-2xl", isDarkMode ? "bg-slate-800" : "bg-slate-50")}>
@@ -1407,7 +1459,7 @@ export default function App() {
                 <h3 className="font-bold truncate max-w-[200px]">{previewFile.name}</h3>
               </div>
               <div className="flex items-center gap-2">
-                <a href={`/api/download/${previewFile.name}`} download className="p-2">
+                <a href={`${API_BASE_URL}/api/download?path=${encodeURIComponent(previewFile.path || previewFile.name)}`} download className="p-2">
                   <Download className="w-6 h-6" />
                 </a>
               </div>
@@ -1416,7 +1468,7 @@ export default function App() {
             <div className="flex-1 flex items-center justify-center p-4">
               {previewFile.mimeType.startsWith('image/') ? (
                 <img 
-                  src={`/api/preview/${previewFile.name}`} 
+                  src={`${API_BASE_URL}/api/preview?path=${encodeURIComponent(previewFile.path || previewFile.name)}`} 
                   alt={previewFile.name}
                   className="max-w-full max-h-full object-contain rounded-lg"
                   referrerPolicy="no-referrer"
@@ -1425,14 +1477,14 @@ export default function App() {
                 <video 
                   controls 
                   className="max-w-full max-h-full rounded-lg"
-                  src={`/api/preview/${previewFile.name}`}
+                  src={`${API_BASE_URL}/api/preview?path=${encodeURIComponent(previewFile.path || previewFile.name)}`}
                 />
               ) : (
                 <div className="bg-white/5 p-12 rounded-3xl flex flex-col items-center gap-4 text-white/60">
                   <FileText className="w-24 h-24" />
                   <p>Previsualización no disponible para este tipo de archivo</p>
                   <a 
-                    href={`/api/download/${previewFile.name}`} 
+                    href={`${API_BASE_URL}/api/download?path=${encodeURIComponent(previewFile.path || previewFile.name)}`} 
                     download
                     className="bg-white text-black px-6 py-2 rounded-full font-bold"
                   >
@@ -1714,14 +1766,14 @@ export default function App() {
                 <div className={cn("w-full aspect-video rounded-3xl overflow-hidden mb-6 border", isDarkMode ? "bg-slate-800 border-slate-700" : "bg-slate-50 border-slate-100")}>
                   {fileActionMenu.mimeType?.startsWith('image/') ? (
                     <img 
-                      src={`/api/download/${fileActionMenu.name}`} 
+                      src={`${API_BASE_URL}/api/preview?path=${encodeURIComponent(fileActionMenu.path || fileActionMenu.name)}`} 
                       alt={fileActionMenu.name}
                       className="w-full h-full object-cover"
                       referrerPolicy="no-referrer"
                     />
                   ) : (
                     <video 
-                      src={`/api/download/${fileActionMenu.name}`}
+                      src={`${API_BASE_URL}/api/preview?path=${encodeURIComponent(fileActionMenu.path || fileActionMenu.name)}`}
                       className="w-full h-full object-cover"
                       muted
                       autoPlay
@@ -1746,7 +1798,7 @@ export default function App() {
                   Previsualizar Pantalla Completa
                 </button>
                 <a 
-                  href={`/api/download/${fileActionMenu.name}`}
+                  href={`${API_BASE_URL}/api/download?path=${encodeURIComponent(fileActionMenu.path || fileActionMenu.name)}`}
                   download
                   className={cn(
                     "flex items-center gap-3 p-4 rounded-2xl font-bold transition-colors",
@@ -1758,7 +1810,7 @@ export default function App() {
                 </a>
                 <button 
                   onClick={() => {
-                    copyToClipboard(`${window.location.origin}/api/download/${fileActionMenu.name}`);
+                    copyToClipboard(`${window.location.origin}/api/download?path=${encodeURIComponent(fileActionMenu.path || fileActionMenu.name)}`);
                     setFileActionMenu(null);
                   }}
                   className={cn(
@@ -1772,7 +1824,7 @@ export default function App() {
                 {!isReadOnly && (
                   <button 
                     onClick={() => {
-                      setDeleteConfirm(fileActionMenu.name);
+                      setDeleteConfirm(fileActionMenu.path || fileActionMenu.name);
                       setFileActionMenu(null);
                     }}
                     className={cn(

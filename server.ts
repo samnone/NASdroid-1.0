@@ -118,14 +118,62 @@ async function startServer() {
     }
   });
 
-  // Upload files
-  app.post("/api/upload", upload.array("files"), (req, res) => {
-    res.json({ message: "Files uploaded successfully" });
+  // Upload files to specific path
+  app.post("/api/upload", upload.array("files"), async (req, res) => {
+    try {
+      const subPath = (req.query.path as string) || "";
+      const targetDir = path.join(STORAGE_DIR, subPath);
+
+      // Security check
+      if (!targetDir.startsWith(STORAGE_DIR)) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      if (!fs.existsSync(targetDir)) {
+        await fs.ensureDir(targetDir);
+      }
+
+      // Move uploaded files to target directory
+      const files = req.files as Express.Multer.File[];
+      for (const file of files) {
+        const finalPath = path.join(targetDir, file.originalname);
+        await fs.move(file.path, finalPath, { overwrite: true });
+      }
+
+      res.json({ message: "Files uploaded successfully" });
+    } catch (error) {
+      console.error("Upload error:", error);
+      res.status(500).json({ error: "Upload failed" });
+    }
   });
 
-  // Download file
-  app.get("/api/download/:filename", (req, res) => {
-    const filePath = path.join(STORAGE_DIR, req.params.filename);
+  // Create directory
+  app.post("/api/mkdir", async (req, res) => {
+    try {
+      const { name, path: subPath } = req.body;
+      const targetDir = path.join(STORAGE_DIR, subPath || "", name);
+
+      // Security check
+      if (!targetDir.startsWith(STORAGE_DIR)) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      await fs.ensureDir(targetDir);
+      res.json({ message: "Directory created" });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create directory" });
+    }
+  });
+
+  // Download file (using query param for full path)
+  app.get("/api/download", (req, res) => {
+    const subPath = (req.query.path as string) || "";
+    const filePath = path.join(STORAGE_DIR, subPath);
+    
+    if (!filePath.startsWith(STORAGE_DIR)) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
     if (fs.existsSync(filePath)) {
       res.download(filePath);
     } else {
@@ -133,9 +181,15 @@ async function startServer() {
     }
   });
 
-  // Preview file (Stream)
-  app.get("/api/preview/:filename", (req, res) => {
-    const filePath = path.join(STORAGE_DIR, req.params.filename);
+  // Preview file (using query param for full path)
+  app.get("/api/preview", (req, res) => {
+    const subPath = (req.query.path as string) || "";
+    const filePath = path.join(STORAGE_DIR, subPath);
+
+    if (!filePath.startsWith(STORAGE_DIR)) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
     if (fs.existsSync(filePath)) {
       const mimeType = mime.lookup(filePath) || "application/octet-stream";
       res.setHeader("Content-Type", mimeType);
@@ -145,14 +199,20 @@ async function startServer() {
     }
   });
 
-  // Delete file
-  app.delete("/api/files/:filename", async (req, res) => {
+  // Delete file/folder (using query param for full path)
+  app.delete("/api/files", async (req, res) => {
     try {
-      const filePath = path.join(STORAGE_DIR, req.params.filename);
+      const subPath = (req.query.path as string) || "";
+      const filePath = path.join(STORAGE_DIR, subPath);
+
+      if (!filePath.startsWith(STORAGE_DIR)) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
       await fs.remove(filePath);
-      res.json({ message: "File deleted" });
+      res.json({ message: "Item deleted" });
     } catch (error) {
-      res.status(500).json({ error: "Failed to delete file" });
+      res.status(500).json({ error: "Failed to delete item" });
     }
   });
 
