@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">NASdroid 1.0</string>
+    <string name="title_activity_main">NASdroid 1.0</string>
+    <string name="package_name">com.droidnas.app</string>
+    <string name="custom_url_scheme">com.droidnas.app</string>
+</resources>
